@@ -4,9 +4,10 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
 ## Resources
 * [Wikipedia Data](https://courses.bootcampspot.com/courses/137/files/14478/download?wrap=1)
 * [Kaggle Data](https://www.kaggle.com/account/login?returnUrl=%2Frounakbanik%2Fthe-movies-dataset%2Fdata)
-* ![Movies Database ERD](./movies-etl.png)
 * ![Challenge ETL Code](./challenge.py)
 * ![Pipeline Log File](./etl.log)
+* Databe ERD
+![Movies Database ERD](./movies-etl.png)
 
 ## Data Assumpitons
 * The wikipedia and Kaggle datasets will remains in the same format. 
