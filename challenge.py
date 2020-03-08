@@ -278,7 +278,7 @@ def process_ratings(path_to_ratings_file):
         logger.error(f'movies-etl had an error in process_ratings: {sys.exc_info()[0]}')
 
 
-# In[9]:
+# In[ ]:
 
 
 #load the ratings data in chunks
@@ -294,7 +294,7 @@ def load_ratings(path_to_ratings_file,db_string):
             rows_imported += len(data)
             
             # add elapsed time to final print out
-            logger.info(f'Done. {time.time() - start_time} total seconds elapsed')
+            logger.info(f'Done. {(time.time() - start_time):,.2f} total seconds elapsed')
              
     except:
         logger.error(f'movies-etl had an error in load_ratings: {sys.exc_info()[0]}')
@@ -303,7 +303,7 @@ def load_ratings(path_to_ratings_file,db_string):
 
 # ## Challenge Function
 
-# In[11]:
+# In[10]:
 
 
 def main_movies_etl(path_to_wiki_file, path_to_kaggle_file, path_to_ratings_file):
@@ -405,7 +405,7 @@ def main_movies_etl(path_to_wiki_file, path_to_kaggle_file, path_to_ratings_file
     
 
 
-# In[12]:
+# In[ ]:
 
 
 movies_with_ratings_df = main_movies_etl(wikipedia_data_file,kaggle_metadata_file,ratings_file)
