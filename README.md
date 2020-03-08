@@ -6,7 +6,7 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
 * [Kaggle Data](https://www.kaggle.com/account/login?returnUrl=%2Frounakbanik%2Fthe-movies-dataset%2Fdata)
 * ![Challenge ETL Code](./challenge.py)
 * ![Pipeline Log File](./etl.log)
-* Databe ERD
+* Databe ERD\n
 ![Movies Database ERD](./movies-etl.png)
 
 ## Data Assumpitons
