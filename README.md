@@ -1,7 +1,7 @@
 # Movies-ETL
 
 ## Entity Relationship Diagram
-![][movie-etl.png]
+![](movie-etl.png)
 ## resources
 * something about the large dataset
 * log file
