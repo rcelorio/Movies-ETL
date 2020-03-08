@@ -7,7 +7,7 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
 * ![Challenge ETL Code](./challenge.py)
 * ![Pipeline Log File](./etl.log)
 * Databe ERD
-*![Movies Database ERD](./movies-etl.png)
+* ![Movies Database ERD](./movies-etl.png)
 
 ## Data Assumpitons
 * The wikipedia and Kaggle datasets will remains in the same format. 
