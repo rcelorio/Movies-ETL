@@ -5,8 +5,8 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
 ![Movies Database ERD](./movies-etl.png)
 
 ## resources
-* ![Wikipedia Data](https://courses.bootcampspot.com/courses/137/files/14478/download?wrap=1)
-* ![Kaggle Data](https://www.kaggle.com/account/login?returnUrl=%2Frounakbanik%2Fthe-movies-dataset%2Fdata)
+* [Wikipedia Data](https://courses.bootcampspot.com/courses/137/files/14478/download?wrap=1)
+* [Kaggle Data](https://www.kaggle.com/account/login?returnUrl=%2Frounakbanik%2Fthe-movies-dataset%2Fdata)
 * log file
 extract the Wikipedia and Kaggle data from their respective files, transform the datasets by cleaning them up and joining them together, and load the cleaned dataset into a SQL database.
 
