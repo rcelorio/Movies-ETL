@@ -1,581 +1,418 @@
-{
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "#### Imports and variables for OS files"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 1,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#Import dependencies\n",
-    "import json\n",
-    "import pandas as pd\n",
-    "import numpy as np\n",
-    "import re\n",
-    "from config import db_password\n",
-    "import time\n",
-    "import sys\n",
-    "import logging\n",
-    "from sqlalchemy import MetaData\n",
-    "from sqlalchemy import create_engine\n",
-    "from sqlalchemy.engine.url import URL\n",
-    "from sqlalchemy.ext.declarative import declarative_base"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 2,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#set up the files we'll use\n",
-    "file_dir = '/Users/rfcelorio/BerkeleyExtension/M8-ETL/Movies-ETL/'\n",
-    "wikipedia_data_file = f'{file_dir}wikipedia.movies.json'\n",
-    "kaggle_metadata_file = f'{file_dir}movies_metadata.csv'\n",
-    "ratings_file = f'{file_dir}ratings.csv'\n",
-    "log_file = f'{file_dir}etl.log'"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 3,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "logger = logging.getLogger('movies-etl')\n",
-    "hdlr = logging.FileHandler(log_file, mode='w')\n",
-    "formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')\n",
-    "hdlr.setFormatter(formatter)\n",
-    "logger.addHandler(hdlr) \n",
-    "logger.setLevel(logging.INFO)\n",
-    "logger.info('### Starting ETL Process ###')"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "#### Function to clean the wikipedia movies scrape"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 4,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "def clean_movie(movie):\n",
-    "    try:\n",
-    "        movie = dict(movie) #create a non-destructive copy\n",
-    "        alt_titles = {}\n",
-    "        # combine alternate titles into one list\n",
-    "        for key in ['Also known as','Arabic','Cantonese','Chinese','French',\n",
-    "                    'Hangul','Hebrew','Hepburn','Japanese','Literally',\n",
-    "                    'Mandarin','McCune-Reischauer','Original title','Polish',\n",
-    "                    'Revised Romanization','Romanized','Russian',\n",
-    "                    'Simplified','Traditional','Yiddish']:\n",
-    "            if key in movie:\n",
-    "                alt_titles[key] = movie[key]\n",
-    "                movie.pop(key)\n",
-    "        if len(alt_titles) > 0:\n",
-    "            movie['alt_titles'] = alt_titles\n",
-    "\n",
-    "        # merge column names\n",
-    "        def change_column_name(old_name, new_name):\n",
-    "            if old_name in movie:\n",
-    "                movie[new_name] = movie.pop(old_name)\n",
-    "        change_column_name('Adaptation by', 'Writer(s)')\n",
-    "        change_column_name('Country of origin', 'Country')\n",
-    "        change_column_name('Directed by', 'Director')\n",
-    "        change_column_name('Distributed by', 'Distributor')\n",
-    "        change_column_name('Edited by', 'Editor(s)')\n",
-    "        change_column_name('Length', 'Running time')\n",
-    "        change_column_name('Original release', 'Release date')\n",
-    "        change_column_name('Music by', 'Composer(s)')\n",
-    "        change_column_name('Produced by', 'Producer(s)')\n",
-    "        change_column_name('Producer', 'Producer(s)')\n",
-    "        change_column_name('Productioncompanies ', 'Production company(s)')\n",
-    "        change_column_name('Productioncompany ', 'Production company(s)')\n",
-    "        change_column_name('Released', 'Release Date')\n",
-    "        change_column_name('Release Date', 'Release date')\n",
-    "        change_column_name('Screen story by', 'Writer(s)')\n",
-    "        change_column_name('Screenplay by', 'Writer(s)')\n",
-    "        change_column_name('Story by', 'Writer(s)')\n",
-    "        change_column_name('Theme music composer', 'Composer(s)')\n",
-    "        change_column_name('Written by', 'Writer(s)')\n",
-    "\n",
-    "        return movie\n",
-    "    except:\n",
-    "        logger.error(f'movies-etl had an error in clean_movie: {sys.exc_info()[0]}')"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "#### Function to parse through dollar strings"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 5,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#function to parse dollars\n",
-    "def parse_dollars(s):\n",
-    "    try:\n",
-    "        # if s is not a string, return NaN\n",
-    "        if type(s) != str:\n",
-    "            return np.nan\n",
-    "\n",
-    "        # if input is of the form $###.# million\n",
-    "        if re.match(r'\\$\\s*\\d+\\.?\\d*\\s*milli?on', s, flags=re.IGNORECASE):\n",
-    "\n",
-    "            # remove dollar sign and \" million\"\n",
-    "            s = re.sub('\\$|\\s|[a-zA-Z]','', s)\n",
-    "\n",
-    "            # convert to float and multiply by a million\n",
-    "            value = float(s) * 10**6\n",
-    "\n",
-    "            # return value\n",
-    "            return value\n",
-    "\n",
-    "        # if input is of the form $###.# billion\n",
-    "        elif re.match(r'\\$\\s*\\d+\\.?\\d*\\s*billi?on', s, flags=re.IGNORECASE):\n",
-    "\n",
-    "            # remove dollar sign and \" billion\"\n",
-    "            s = re.sub('\\$|\\s|[a-zA-Z]','', s)\n",
-    "\n",
-    "            # convert to float and multiply by a billion\n",
-    "            value = float(s) * 10**9\n",
-    "\n",
-    "            # return value\n",
-    "            return value\n",
-    "\n",
-    "        # if input is of the form $###,###,###\n",
-    "        elif re.match(r'\\$\\s*\\d{1,3}(?:[,\\.]\\d{3})+(?!\\s[mb]illion)', s, flags=re.IGNORECASE):\n",
-    "\n",
-    "            # remove dollar sign and commas\n",
-    "            s = re.sub('\\$|,','', s)\n",
-    "\n",
-    "            # convert to float\n",
-    "            value = float(s)\n",
-    "\n",
-    "            # return value\n",
-    "            return value\n",
-    "\n",
-    "        # otherwise, return NaN\n",
-    "        else:\n",
-    "            return np.nan\n",
-    "    except:\n",
-    "        logger.error(f'movies-etl had an error in parse_dollars: {sys.exc_info()[0]}')"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "#### Function to process the wikipedia file and return the expected DF"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 6,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#process the Wiki file\n",
-    "\n",
-    "def process_wiki_movies(path_to_wiki_file):\n",
-    "    try:\n",
-    "        #Open wiki file and return serialized JSON\n",
-    "        with open(path_to_wiki_file, mode='r') as file:\n",
-    "            wiki_movies_raw = json.load(file)\n",
-    "\n",
-    "        #Conver to DF\n",
-    "        wiki_movies_df = pd.DataFrame(wiki_movies_raw)\n",
-    "    \n",
-    "        #consolidate director column into list \n",
-    "        wiki_movies = [movie for movie in wiki_movies_raw\n",
-    "                       if ('Director' in movie or 'Directed by' in movie)\n",
-    "                           and 'imdb_link' in movie\n",
-    "                           and 'No. of episodes' not in movie]\n",
-    "        \n",
-    "        #clean the movies & convert to df\n",
-    "        clean_movies = [clean_movie(movie) for movie in wiki_movies]\n",
-    "        wiki_movies_df = pd.DataFrame(clean_movies)\n",
-    "\n",
-    "        #get a deduped imdb id so we can use it as an index\n",
-    "        wiki_movies_df['imdb_id'] = wiki_movies_df['imdb_link'].str.extract(r'(tt\\d{7})')\n",
-    "        wiki_movies_df.drop_duplicates(subset='imdb_id', inplace=True)\n",
-    "\n",
-    "        #thin it down\n",
-    "        wiki_columns_to_keep = [column for column in wiki_movies_df.columns if wiki_movies_df[column].isnull().sum() < len(wiki_movies_df) * 0.9]\n",
-    "        wiki_movies_df = wiki_movies_df[wiki_columns_to_keep]\n",
-    "\n",
-    "    except:\n",
-    "         logger.error(f'movies-etl had an error in process_wiki_movies: {sys.exc_info()[0]}')\n",
-    "\n",
-    "    \n",
-    "    #local function to clean money \n",
-    "    def clean_money_col(df_column_name,new_column_name):\n",
-    "    \n",
-    "        #transform the column\n",
-    "        working_column = wiki_movies_df[df_column_name].dropna() #drop null\n",
-    "        working_column = working_column.apply(lambda x: ' '.join(x) if type(x) == list else x) #conver lists\n",
-    "        working_column = working_column.str.replace(r'\\$.*[-—–](?![a-z])', '$', regex=True) #parse the - types\n",
-    "        working_column = working_column.str.replace(r'\\[\\d+\\]\\s*', '') #clean bracketed numbers\n",
-    "        \n",
-    "        #get dollars by regeex\n",
-    "        form_one = r'\\$\\s*\\d+\\.?\\d*\\s*[mb]illi?on'\n",
-    "        form_two = r'\\$\\s*\\d{1,3}(?:[,\\.]\\d{3})+(?!\\s[mb]illion)'    \n",
-    "\n",
-    "        # drop from source\n",
-    "        wiki_movies_df[new_column_name] = working_column.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)\n",
-    "        wiki_movies_df.drop(df_column_name, axis=1, inplace=True)\n",
-    "        return wiki_movies_df\n",
-    "    \n",
-    "\n",
-    "    try:\n",
-    "        #process money columns\n",
-    "        clean_money_col('Box office','box_office')\n",
-    "        clean_money_col('Budget','budget')\n",
-    "    \n",
-    "        #Process Release Date \n",
-    "        release_date = wiki_movies_df['Release date'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)\n",
-    "        date_form_one = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s[123]\\d,\\s\\d{4}'\n",
-    "        date_form_two = r'\\d{4}.[01]\\d.[123]\\d'\n",
-    "        date_form_three = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s\\d{4}'\n",
-    "        date_form_four = r'\\d{4}'\n",
-    "        \n",
-    "        #add to DF and drop the old one\n",
-    "        wiki_movies_df['release_date'] = pd.to_datetime(release_date.str.extract(f'({date_form_one}|{date_form_two}|{date_form_three}|{date_form_four})')[0], infer_datetime_format=True)\n",
-    "        wiki_movies_df.drop('Release date', axis=1, inplace=True)\n",
-    "        \n",
-    "        #process time fields\n",
-    "        running_time = wiki_movies_df['Running time'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)\n",
-    "        running_time_extract = running_time.str.extract(r'(\\d+)\\s*ho?u?r?s?\\s*(\\d*)|(\\d+)\\s*m')\n",
-    "        running_time_extract = running_time_extract.apply(lambda col: pd.to_numeric(col, errors='coerce')).fillna(0)\n",
-    "                \n",
-    "        #add to DF and drop the old one\n",
-    "        wiki_movies_df['running_time'] = running_time_extract.apply(lambda row: row[0]*60 + row[1] if row[2] == 0 else row[2], axis=1)\n",
-    "        wiki_movies_df.drop('Running time', axis=1, inplace=True)\n",
-    "        \n",
-    "        return wiki_movies_df\n",
-    "    \n",
-    "    except:\n",
-    "         logger.error(f'movies-etl had an error in process_wiki_movies: {sys.exc_info()[0]}')\n"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "#### Function to encapsulate the kaggle file transformations"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 7,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#Process the kaggle data\n",
-    "def process_kaggle_movies(path_to_kaggle_file):\n",
-    "    try:\n",
-    "        #Open the file\n",
-    "        kaggle_metadata = pd.read_csv(path_to_kaggle_file)\n",
-    "        #remove adult films\n",
-    "        kaggle_metadata = kaggle_metadata[kaggle_metadata['adult'] == 'False'].drop('adult',axis='columns')\n",
-    "\n",
-    "        #build DF columns\n",
-    "        kaggle_metadata['video'] = kaggle_metadata['video'] == 'True'\n",
-    "        kaggle_metadata['budget'] = kaggle_metadata['budget'].astype(int)\n",
-    "        kaggle_metadata['id'] = pd.to_numeric(kaggle_metadata['id'], errors='raise')\n",
-    "        kaggle_metadata['popularity'] = pd.to_numeric(kaggle_metadata['popularity'], errors='raise')\n",
-    "        kaggle_metadata['release_date'] = pd.to_datetime(kaggle_metadata['release_date'])\n",
-    "\n",
-    "        return kaggle_metadata\n",
-    "    except:\n",
-    "        logger.error(f'movies-etl had an error in process_kaggle_movies: {sys.exc_info()[0]}')"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 8,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#Process the ratings data\n",
-    "def process_ratings(path_to_ratings_file):\n",
-    "    try:\n",
-    "        #Open the file\n",
-    "        ratings = pd.read_csv(path_to_ratings_file\n",
-    "                              , dtype={'userId': int, 'movieId':  int, 'rating': float, 'timestamp': int})\n",
-    "        #fix the timestamp\n",
-    "        ratings['timestamp'] = pd.to_datetime(ratings['timestamp'], unit='s')\n",
-    "        #Group ratings by movieid\n",
-    "        rating_counts = ratings.groupby(['movieId','rating'], as_index=False).count() \\\n",
-    "                    .rename({'userId':'count'}, axis=1) \\\n",
-    "                    .pivot(index='movieId',columns='rating', values='count')\n",
-    "        rating_counts.columns = ['rating_' + str(col) for col in rating_counts.columns]\n",
-    "        return rating_counts\n",
-    "    except:\n",
-    "        logger.error(f'movies-etl had an error in process_ratings: {sys.exc_info()[0]}')"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 9,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "#load the ratings data in chunks\n",
-    "def load_ratings(path_to_ratings_file,db_string):\n",
-    "    try:\n",
-    "        engine = create_engine(db_string)\n",
-    "        rows_imported = 0\n",
-    "        # get the start_time from time.time()\n",
-    "        start_time = time.time()\n",
-    "        for data in pd.read_csv(path_to_ratings_file, chunksize=1000000\n",
-    "                                , dtype={'userId': int, 'movieId':  int, 'rating': float, 'timestamp': int}):\n",
-    "            logger.info(f'importing rows {rows_imported:,} to {rows_imported + len(data):,}...')\n",
-    "            data.to_sql(name='ratings', con=engine, if_exists='append')\n",
-    "            rows_imported += len(data)\n",
-    "            \n",
-    "            # add elapsed time to final print out\n",
-    "            logger.info(f'Done. {(time.time() - start_time):,.2f} total seconds elapsed')\n",
-    "             \n",
-    "    except:\n",
-    "        logger.error(f'movies-etl had an error in load_ratings: {sys.exc_info()[0]}')\n",
-    "    "
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Challenge Function"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 10,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "def main_movies_etl(path_to_wiki_file, path_to_kaggle_file, path_to_ratings_file):\n",
-    "    try:\n",
-    "        # call the functions to process Wiki and Kaggle files\n",
-    "        try:\n",
-    "            wiki_movies_df = process_wiki_movies(path_to_wiki_file)\n",
-    "            logger.info('Processed wiki file')\n",
-    "        except:\n",
-    "            logger.error(f'movies-etl had an error running process_wiki_movies: {sys.exc_info()[0]}')\n",
-    "        \n",
-    "        try:\n",
-    "            kaggle_metadata = process_kaggle_movies(path_to_kaggle_file)\n",
-    "            logger.info('Processed kaggle file')\n",
-    "        except:\n",
-    "            logger.error(f'movies-etl had an error running process_kaggle_movies: {sys.exc_info()[0]}')\n",
-    "        \n",
-    "        # Merge data sets to further transform\n",
-    "        movies_df = pd.merge(wiki_movies_df, kaggle_metadata, on='imdb_id', suffixes=['_wiki','_kaggle'])\n",
-    "        #drop some garbage\n",
-    "        movies_df = movies_df.drop(movies_df[(movies_df['release_date_wiki'] > '1996-01-01') & (movies_df['release_date_kaggle'] < '1965-01-01')].index)\n",
-    "        #convert list colums into tuples\n",
-    "        movies_df['Language'].apply(lambda x: tuple(x) if type(x) == list else x).value_counts(dropna=False)\n",
-    "        #drop columns we dont need\n",
-    "        movies_df.drop(columns=['title_wiki','release_date_wiki','Language','Production company(s)'], inplace=True)\n",
-    "\n",
-    "        #through analysis we determined the kaggle data is more complete than the wiki. This function fills in kaggle data from the wiki column then drops the wiki column.\n",
-    "        def fill_missing_kaggle_data(df, kaggle_column, wiki_column):\n",
-    "            df[kaggle_column] = df.apply(\n",
-    "                lambda row: row[wiki_column] if row[kaggle_column] == 0 else row[kaggle_column]\n",
-    "                , axis=1)\n",
-    "            df.drop(columns=wiki_column, inplace=True)\n",
-    "\n",
-    "        fill_missing_kaggle_data(movies_df, 'runtime', 'running_time')\n",
-    "        fill_missing_kaggle_data(movies_df, 'budget_kaggle', 'budget_wiki')\n",
-    "        fill_missing_kaggle_data(movies_df, 'revenue', 'box_office')\n",
-    "\n",
-    "        #reorder and rename columns\n",
-    "        movies_df = movies_df[['imdb_id','id','title_kaggle','original_title','tagline','belongs_to_collection','url','imdb_link',\n",
-    "                           'runtime','budget_kaggle','revenue','release_date_kaggle','popularity','vote_average','vote_count',\n",
-    "                           'genres','original_language','overview','spoken_languages','Country',\n",
-    "                           'production_companies','production_countries','Distributor',\n",
-    "                           'Producer(s)','Director','Starring','Cinematography','Editor(s)','Writer(s)','Composer(s)','Based on'\n",
-    "                          ]]\n",
-    "\n",
-    "        movies_df.rename({'id':'kaggle_id',\n",
-    "                      'title_kaggle':'title',\n",
-    "                      'url':'wikipedia_url',\n",
-    "                      'budget_kaggle':'budget',\n",
-    "                      'release_date_kaggle':'release_date',\n",
-    "                      'Country':'country',\n",
-    "                      'Distributor':'distributor',\n",
-    "                      'Producer(s)':'producers',\n",
-    "                      'Director':'director',\n",
-    "                      'Starring':'starring',\n",
-    "                      'Cinematography':'cinematography',\n",
-    "                      'Editor(s)':'editors',\n",
-    "                      'Writer(s)':'writers',\n",
-    "                      'Composer(s)':'composers',\n",
-    "                      'Based on':'based_on'\n",
-    "                     }, axis='columns', inplace=True)\n",
-    "\n",
-    "        #call function to return the grouped ratings\n",
-    "        rating_counts = process_ratings(ratings_file)\n",
-    "        # join the ratings\n",
-    "        movies_with_ratings_df = pd.merge(movies_df, rating_counts, left_on='kaggle_id', right_index=True, how='left')\n",
-    "        #fill the nulls\n",
-    "        movies_with_ratings_df[rating_counts.columns] = movies_with_ratings_df[rating_counts.columns].fillna(0)\n",
-    "        \n",
-    "        #load movies to db\n",
-    "        db_string = f\"postgres://postgres:{db_password}@127.0.0.1:5432/movie_data\"\n",
-    "        engine = create_engine(db_string)\n",
-    "        #drop and recreate the existing table before loading\n",
-    "        movies_with_ratings_df.to_sql(name='movies', con=engine, if_exists='replace')\n",
-    "               \n",
-    "        #Complete Message\n",
-    "        logger.info('Finished loading movies')\n",
-    "        \n",
-    "        #load the ratings file in chunks\n",
-    "        #drop ratings before loading\n",
-    "        def drop_table(table_name):\n",
-    "            base = declarative_base()\n",
-    "            metadata = MetaData(engine, reflect=True)\n",
-    "            table = metadata.tables.get(table_name)\n",
-    "            if table is not None:\n",
-    "                logging.info(f'Deleting {table_name} table')\n",
-    "                base.metadata.drop_all(engine, [table], checkfirst=True)\n",
-    "        \n",
-    "        drop_table('ratings')\n",
-    "        load_ratings(ratings_file, db_string) \n",
-    "    \n",
-    "        #Complete Message\n",
-    "        logger.info('Finished loading ratings')\n",
-    "        logger.info('### END ETL Process ###')\n",
-    "    except:\n",
-    "        \n",
-    "        logger.error(f'movies-etl had an error in main_movies_etl: {sys.exc_info()[0]}')\n",
-    "        logger.error(f'{sys.exc_info()[1]} - {sys.exc_info()[2]}')\n",
-    "        logger.error(f'movies-etl had an error in main_movies_etl: {sys.exc_info()[0]}')\n",
-    "                                            \n",
-    "                                            \n",
-    "                                            \n",
-    "    "
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 11,
-   "metadata": {},
-   "outputs": [
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "/Users/rfcelorio/anaconda3/lib/python3.7/site-packages/IPython/core/interactiveshell.py:3319: DtypeWarning: Columns (10) have mixed types.Specify dtype option on import or set low_memory=False.\n",
-      "  exec(code_obj, self.user_global_ns, self.user_ns)\n",
-      "/Users/rfcelorio/anaconda3/lib/python3.7/site-packages/ipykernel_launcher.py:81: SADeprecationWarning: The MetaData.reflect flag is deprecated and will be removed in a future release.   Please use the MetaData.reflect() method.\n",
-      "INFO:movies-etl:importing rows 0 to 1,000,000...\n",
-      "INFO:movies-etl:Done. 83.13 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 1,000,000 to 2,000,000...\n",
-      "INFO:movies-etl:Done. 165.88 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 2,000,000 to 3,000,000...\n",
-      "INFO:movies-etl:Done. 249.50 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 3,000,000 to 4,000,000...\n",
-      "INFO:movies-etl:Done. 332.09 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 4,000,000 to 5,000,000...\n",
-      "INFO:movies-etl:Done. 414.51 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 5,000,000 to 6,000,000...\n",
-      "INFO:movies-etl:Done. 497.90 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 6,000,000 to 7,000,000...\n",
-      "INFO:movies-etl:Done. 580.53 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 7,000,000 to 8,000,000...\n",
-      "INFO:movies-etl:Done. 664.68 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 8,000,000 to 9,000,000...\n",
-      "INFO:movies-etl:Done. 747.98 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 9,000,000 to 10,000,000...\n",
-      "INFO:movies-etl:Done. 830.76 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 10,000,000 to 11,000,000...\n",
-      "INFO:movies-etl:Done. 913.79 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 11,000,000 to 12,000,000...\n",
-      "INFO:movies-etl:Done. 997.22 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 12,000,000 to 13,000,000...\n",
-      "INFO:movies-etl:Done. 1,080.52 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 13,000,000 to 14,000,000...\n",
-      "INFO:movies-etl:Done. 1,163.90 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 14,000,000 to 15,000,000...\n",
-      "INFO:movies-etl:Done. 1,247.21 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 15,000,000 to 16,000,000...\n",
-      "INFO:movies-etl:Done. 1,329.69 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 16,000,000 to 17,000,000...\n",
-      "INFO:movies-etl:Done. 1,412.35 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 17,000,000 to 18,000,000...\n",
-      "INFO:movies-etl:Done. 1,495.44 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 18,000,000 to 19,000,000...\n",
-      "INFO:movies-etl:Done. 1,578.86 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 19,000,000 to 20,000,000...\n",
-      "INFO:movies-etl:Done. 1,661.71 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 20,000,000 to 21,000,000...\n",
-      "INFO:movies-etl:Done. 1,744.62 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 21,000,000 to 22,000,000...\n",
-      "INFO:movies-etl:Done. 1,826.82 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 22,000,000 to 23,000,000...\n",
-      "INFO:movies-etl:Done. 1,910.45 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 23,000,000 to 24,000,000...\n",
-      "INFO:movies-etl:Done. 1,993.84 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 24,000,000 to 25,000,000...\n",
-      "INFO:movies-etl:Done. 2,076.46 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 25,000,000 to 26,000,000...\n",
-      "INFO:movies-etl:Done. 2,159.53 total seconds elapsed\n",
-      "INFO:movies-etl:importing rows 26,000,000 to 26,024,289...\n",
-      "INFO:movies-etl:Done. 2,161.47 total seconds elapsed\n",
-      "INFO:movies-etl:Finished loading ratings\n",
-      "INFO:movies-etl:### END ETL Process ###\n"
-     ]
-    }
-   ],
-   "source": [
-    "movies_with_ratings_df = main_movies_etl(wikipedia_data_file,kaggle_metadata_file,ratings_file)"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": []
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "Python 3",
-   "language": "python",
-   "name": "python3"
-  },
-  "language_info": {
-   "codemirror_mode": {
-    "name": "ipython",
-    "version": 3
-   },
-   "file_extension": ".py",
-   "mimetype": "text/x-python",
-   "name": "python",
-   "nbconvert_exporter": "python",
-   "pygments_lexer": "ipython3",
-   "version": "3.7.4"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 4
-}
+#!/usr/bin/env python
+# coding: utf-8
+
+# #### Imports and variables for OS files
+
+# In[1]:
+
+
+#Import dependencies
+import json
+import pandas as pd
+import numpy as np
+import re
+from config import db_password
+import time
+import sys
+import logging
+from sqlalchemy import create_engine
+
+
+# In[2]:
+
+
+#set up the files we'll use
+file_dir = '/Users/rfcelorio/BerkeleyExtension/M8-ETL/Movies-ETL/'
+wikipedia_data_file = f'{file_dir}wikipedia.movies.json'
+kaggle_metadata_file = f'{file_dir}movies_metadata.csv'
+ratings_file = f'{file_dir}ratings.csv'
+log_file = f'{file_dir}etl.log'
+
+
+# In[3]:
+
+
+#log configuration
+logger = logging.getLogger('movies-etl')
+hdlr = logging.FileHandler(log_file, mode='w')
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr) 
+logger.setLevel(logging.INFO)
+logger.info('### Starting ETL Process ###')
+
+
+# #### Function to clean the wikipedia movies scrape
+
+# In[4]:
+
+
+def clean_movie(movie):
+    try:
+        movie = dict(movie) #create a non-destructive copy
+        alt_titles = {}
+        # combine alternate titles into one list
+        for key in ['Also known as','Arabic','Cantonese','Chinese','French',
+                    'Hangul','Hebrew','Hepburn','Japanese','Literally',
+                    'Mandarin','McCune-Reischauer','Original title','Polish',
+                    'Revised Romanization','Romanized','Russian',
+                    'Simplified','Traditional','Yiddish']:
+            if key in movie:
+                alt_titles[key] = movie[key]
+                movie.pop(key)
+        if len(alt_titles) > 0:
+            movie['alt_titles'] = alt_titles
+
+        # merge column names
+        def change_column_name(old_name, new_name):
+            if old_name in movie:
+                movie[new_name] = movie.pop(old_name)
+        change_column_name('Adaptation by', 'Writer(s)')
+        change_column_name('Country of origin', 'Country')
+        change_column_name('Directed by', 'Director')
+        change_column_name('Distributed by', 'Distributor')
+        change_column_name('Edited by', 'Editor(s)')
+        change_column_name('Length', 'Running time')
+        change_column_name('Original release', 'Release date')
+        change_column_name('Music by', 'Composer(s)')
+        change_column_name('Produced by', 'Producer(s)')
+        change_column_name('Producer', 'Producer(s)')
+        change_column_name('Productioncompanies ', 'Production company(s)')
+        change_column_name('Productioncompany ', 'Production company(s)')
+        change_column_name('Released', 'Release Date')
+        change_column_name('Release Date', 'Release date')
+        change_column_name('Screen story by', 'Writer(s)')
+        change_column_name('Screenplay by', 'Writer(s)')
+        change_column_name('Story by', 'Writer(s)')
+        change_column_name('Theme music composer', 'Composer(s)')
+        change_column_name('Written by', 'Writer(s)')
+
+        return movie
+    except:
+        logger.error(f'movies-etl had an error in clean_movie: {sys.exc_info()[0]}')
+
+
+# #### Function to parse through dollar strings
+
+# In[5]:
+
+
+#function to parse dollars
+def parse_dollars(s):
+    try:
+        # if s is not a string, return NaN
+        if type(s) != str:
+            return np.nan
+
+        # if input is of the form $###.# million
+        if re.match(r'\$\s*\d+\.?\d*\s*milli?on', s, flags=re.IGNORECASE):
+
+            # remove dollar sign and " million"
+            s = re.sub('\$|\s|[a-zA-Z]','', s)
+
+            # convert to float and multiply by a million
+            value = float(s) * 10**6
+
+            # return value
+            return value
+
+        # if input is of the form $###.# billion
+        elif re.match(r'\$\s*\d+\.?\d*\s*billi?on', s, flags=re.IGNORECASE):
+
+            # remove dollar sign and " billion"
+            s = re.sub('\$|\s|[a-zA-Z]','', s)
+
+            # convert to float and multiply by a billion
+            value = float(s) * 10**9
+
+            # return value
+            return value
+
+        # if input is of the form $###,###,###
+        elif re.match(r'\$\s*\d{1,3}(?:[,\.]\d{3})+(?!\s[mb]illion)', s, flags=re.IGNORECASE):
+
+            # remove dollar sign and commas
+            s = re.sub('\$|,','', s)
+
+            # convert to float
+            value = float(s)
+
+            # return value
+            return value
+
+        # otherwise, return NaN
+        else:
+            return np.nan
+    except:
+        logger.error(f'movies-etl had an error in parse_dollars: {sys.exc_info()[0]}')
+
+
+# #### Function to process the wikipedia file and return the expected DF
+
+# In[6]:
+
+
+#process the Wiki file
+
+def process_wiki_movies(path_to_wiki_file):
+    try:
+        #Open wiki file and return serialized JSON
+        with open(path_to_wiki_file, mode='r') as file:
+            wiki_movies_raw = json.load(file)
+
+        #Conver to DF
+        wiki_movies_df = pd.DataFrame(wiki_movies_raw)
+    
+        #consolidate director column into list 
+        wiki_movies = [movie for movie in wiki_movies_raw
+                       if ('Director' in movie or 'Directed by' in movie)
+                           and 'imdb_link' in movie
+                           and 'No. of episodes' not in movie]
+        
+        #clean the movies & convert to df
+        clean_movies = [clean_movie(movie) for movie in wiki_movies]
+        wiki_movies_df = pd.DataFrame(clean_movies)
+
+        #get a deduped imdb id so we can use it as an index
+        wiki_movies_df['imdb_id'] = wiki_movies_df['imdb_link'].str.extract(r'(tt\d{7})')
+        wiki_movies_df.drop_duplicates(subset='imdb_id', inplace=True)
+
+        #thin it down
+        wiki_columns_to_keep = [column for column in wiki_movies_df.columns if wiki_movies_df[column].isnull().sum() < len(wiki_movies_df) * 0.9]
+        wiki_movies_df = wiki_movies_df[wiki_columns_to_keep]
+
+    except:
+         logger.error(f'movies-etl had an error in process_wiki_movies: {sys.exc_info()[0]}')
+
+    
+    #local function to clean money 
+    def clean_money_col(df_column_name,new_column_name):
+    
+        #transform the column
+        working_column = wiki_movies_df[df_column_name].dropna() #drop null
+        working_column = working_column.apply(lambda x: ' '.join(x) if type(x) == list else x) #conver lists
+        working_column = working_column.str.replace(r'\$.*[-—–](?![a-z])', '$', regex=True) #parse the - types
+        working_column = working_column.str.replace(r'\[\d+\]\s*', '') #clean bracketed numbers
+        
+        #get dollars by regeex
+        form_one = r'\$\s*\d+\.?\d*\s*[mb]illi?on'
+        form_two = r'\$\s*\d{1,3}(?:[,\.]\d{3})+(?!\s[mb]illion)'    
+
+        # drop from source
+        wiki_movies_df[new_column_name] = working_column.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)
+        wiki_movies_df.drop(df_column_name, axis=1, inplace=True)
+        return wiki_movies_df
+    
+
+    try:
+        #process money columns
+        clean_money_col('Box office','box_office')
+        clean_money_col('Budget','budget')
+    
+        #Process Release Date 
+        release_date = wiki_movies_df['Release date'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
+        date_form_one = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s[123]\d,\s\d{4}'
+        date_form_two = r'\d{4}.[01]\d.[123]\d'
+        date_form_three = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s\d{4}'
+        date_form_four = r'\d{4}'
+        
+        #add to DF and drop the old one
+        wiki_movies_df['release_date'] = pd.to_datetime(release_date.str.extract(f'({date_form_one}|{date_form_two}|{date_form_three}|{date_form_four})')[0], infer_datetime_format=True)
+        wiki_movies_df.drop('Release date', axis=1, inplace=True)
+        
+        #process time fields
+        running_time = wiki_movies_df['Running time'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
+        running_time_extract = running_time.str.extract(r'(\d+)\s*ho?u?r?s?\s*(\d*)|(\d+)\s*m')
+        running_time_extract = running_time_extract.apply(lambda col: pd.to_numeric(col, errors='coerce')).fillna(0)
+                
+        #add to DF and drop the old one
+        wiki_movies_df['running_time'] = running_time_extract.apply(lambda row: row[0]*60 + row[1] if row[2] == 0 else row[2], axis=1)
+        wiki_movies_df.drop('Running time', axis=1, inplace=True)
+        
+        return wiki_movies_df
+    
+    except:
+         logger.error(f'movies-etl had an error in process_wiki_movies: {sys.exc_info()[0]}')
+
+
+# #### Function to encapsulate the kaggle file transformations
+
+# In[7]:
+
+
+#Process the kaggle data
+def process_kaggle_movies(path_to_kaggle_file):
+    try:
+        #Open the file
+        kaggle_metadata = pd.read_csv(path_to_kaggle_file)
+        #remove adult films
+        kaggle_metadata = kaggle_metadata[kaggle_metadata['adult'] == 'False'].drop('adult',axis='columns')
+
+        #build DF columns
+        kaggle_metadata['video'] = kaggle_metadata['video'] == 'True'
+        kaggle_metadata['budget'] = kaggle_metadata['budget'].astype(int)
+        kaggle_metadata['id'] = pd.to_numeric(kaggle_metadata['id'], errors='raise')
+        kaggle_metadata['popularity'] = pd.to_numeric(kaggle_metadata['popularity'], errors='raise')
+        kaggle_metadata['release_date'] = pd.to_datetime(kaggle_metadata['release_date'])
+
+        return kaggle_metadata
+    except:
+        logger.error(f'movies-etl had an error in process_kaggle_movies: {sys.exc_info()[0]}')
+
+
+# In[8]:
+
+
+#Process the ratings data
+def process_ratings(path_to_ratings_file):
+    try:
+        #Open the file
+        ratings = pd.read_csv(f'{file_dir}ratings.csv')
+        #fix the timestamp
+        ratings['timestamp'] = pd.to_datetime(ratings['timestamp'], unit='s')
+        #Group ratings by movieid
+        rating_counts = ratings.groupby(['movieId','rating'], as_index=False).count()                     .rename({'userId':'count'}, axis=1)                     .pivot(index='movieId',columns='rating', values='count')
+        rating_counts.columns = ['rating_' + str(col) for col in rating_counts.columns]
+        return rating_counts
+    except:
+        logger.error(f'movies-etl had an error in process_ratings: {sys.exc_info()[0]}')
+
+
+# In[9]:
+
+
+#load the ratings data in chunks
+def load_ratings(path_to_ratings_file,db_string):
+    try:
+        engine = create_engine(db_string)
+        rows_imported = 0
+        # get the start_time from time.time()
+        start_time = time.time()
+        for data in pd.read_csv(path_to_ratings_file, chunksize=1000000):
+            logger.info(f'importing rows {rows_imported:,} to {rows_imported + len(data):,}...')
+            data.to_sql(name='ratings', con=engine, if_exists='append')
+            rows_imported += len(data)
+            
+            # add elapsed time to final print out
+            logger.info(f'Done. {time.time() - start_time} total seconds elapsed')
+             
+    except:
+        logger.error(f'movies-etl had an error in load_ratings: {sys.exc_info()[0]}')
+    
+
+
+# ## Challenge Function
+
+# In[11]:
+
+
+def main_movies_etl(path_to_wiki_file, path_to_kaggle_file, path_to_ratings_file):
+    try:
+        # call the functions to process Wiki and Kaggle files
+        try:
+            wiki_movies_df = process_wiki_movies(path_to_wiki_file)
+            logger.info('Processed wiki file')
+        except:
+            logger.error(f'movies-etl had an error running process_wiki_movies: {sys.exc_info()[0]}')
+        
+        try:
+            kaggle_metadata = process_kaggle_movies(path_to_kaggle_file)
+            logger.info('Processed kaggle file')
+        except:
+            logger.error(f'movies-etl had an error running process_kaggle_movies: {sys.exc_info()[0]}')
+        
+        # Merge data sets to further transform
+        movies_df = pd.merge(wiki_movies_df, kaggle_metadata, on='imdb_id', suffixes=['_wiki','_kaggle'])
+        #drop some garbage
+        movies_df = movies_df.drop(movies_df[(movies_df['release_date_wiki'] > '1996-01-01') & (movies_df['release_date_kaggle'] < '1965-01-01')].index)
+        #convert list colums into tuples
+        movies_df['Language'].apply(lambda x: tuple(x) if type(x) == list else x).value_counts(dropna=False)
+        #drop columns we dont need
+        movies_df.drop(columns=['title_wiki','release_date_wiki','Language','Production company(s)'], inplace=True)
+
+        #through analysis we determined the kaggle data is more complete than the wiki. This function fills in kaggle data from the wiki column then drops the wiki column.
+        def fill_missing_kaggle_data(df, kaggle_column, wiki_column):
+            df[kaggle_column] = df.apply(
+                lambda row: row[wiki_column] if row[kaggle_column] == 0 else row[kaggle_column]
+                , axis=1)
+            df.drop(columns=wiki_column, inplace=True)
+
+        fill_missing_kaggle_data(movies_df, 'runtime', 'running_time')
+        fill_missing_kaggle_data(movies_df, 'budget_kaggle', 'budget_wiki')
+        fill_missing_kaggle_data(movies_df, 'revenue', 'box_office')
+
+        #reorder and rename columns
+        movies_df = movies_df[['imdb_id','id','title_kaggle','original_title','tagline','belongs_to_collection','url','imdb_link',
+                           'runtime','budget_kaggle','revenue','release_date_kaggle','popularity','vote_average','vote_count',
+                           'genres','original_language','overview','spoken_languages','Country',
+                           'production_companies','production_countries','Distributor',
+                           'Producer(s)','Director','Starring','Cinematography','Editor(s)','Writer(s)','Composer(s)','Based on'
+                          ]]
+
+        movies_df.rename({'id':'kaggle_id',
+                      'title_kaggle':'title',
+                      'url':'wikipedia_url',
+                      'budget_kaggle':'budget',
+                      'release_date_kaggle':'release_date',
+                      'Country':'country',
+                      'Distributor':'distributor',
+                      'Producer(s)':'producers',
+                      'Director':'director',
+                      'Starring':'starring',
+                      'Cinematography':'cinematography',
+                      'Editor(s)':'editors',
+                      'Writer(s)':'writers',
+                      'Composer(s)':'composers',
+                      'Based on':'based_on'
+                     }, axis='columns', inplace=True)
+
+        #call function to return the grouped ratings
+        rating_counts = process_ratings(ratings_file)
+        # join the ratings
+        movies_with_ratings_df = pd.merge(movies_df, rating_counts, left_on='kaggle_id', right_index=True, how='left')
+        #fill the nulls
+        movies_with_ratings_df[rating_counts.columns] = movies_with_ratings_df[rating_counts.columns].fillna(0)
+        
+        #load movies to db
+        db_string = f"postgres://postgres:{db_password}@127.0.0.1:5432/movie_data"
+        engine = create_engine(db_string)
+        
+        try:
+            #delete data without dropping
+            sql_truncate = 'TRUNCATE TABLE public.movies, public.ratings CASCADE;'
+            engine.execute(sql_truncate)
+            logger.info('Truncated tables')
+        except:
+            logger.error('FAILED truncate tables')
+            
+        try:
+            #drop and recreate the existing table before loading
+            movies_with_ratings_df.to_sql(name='movies', con=engine, if_exists='append')
+            logger.info('Finished loading movies')
+        except:
+            logger.error('Failed loading movies')
+        
+        try:
+            #load the ratings file in chunks
+            load_ratings(ratings_file, db_string) 
+            logger.info('Finished loading ratings')
+        except:
+            logger.error('FAILED loading ratings')
+        
+        logger.info('### END ETL Process ###')
+    except:
+         logger.error(f'movies-etl had an error in main_movies_etl: {sys.exc_info()[0]}')
+    
+
+
+# In[12]:
+
+
+movies_with_ratings_df = main_movies_etl(wikipedia_data_file,kaggle_metadata_file,ratings_file)
+
+
+# In[ ]:
+
+
+
+
