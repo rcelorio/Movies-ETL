@@ -20,7 +20,7 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
   * release_date_wiki
   * Language
   * Production company(s) 
-* The company is not interested in analysis of Adult movies. Movies in the Adult category will excluded form the dataset.
+* The company is not interested in analysis of Adult movies. Movies in the Adult category will be excluded from the dataset.
 * Developers in the hackathon will create a local Postgres database to load the data with name: movies_data.
-* The final data pipeline will be executed programatically, with out user interaction. System administrators will change the loggin level to Warning and above when scheduling the pipeline.
+* The final data pipeline will be executed programatically, without user interaction. System administrators will change the loggin level to Warning and above when scheduling the pipeline.
 
