@@ -10,7 +10,7 @@ Amazing Prime Video, the worlds largest streaming video service would like to de
 * ![Movies Database ERD](./movies-etl.png)
 
 ## Data Assumpitons
-* The wikipedia and Kaggle datasets will remains in the same format. 
+* The Wikipedia and Kaggle datasets will remains in the same format. 
 * Kaggle data is more complete however the wikipedia dataset has information on some movies where Kaggle does not. The following columns include the kaggle data filled in with Wikipedia data.
   * running_time
   * budget_wiki
